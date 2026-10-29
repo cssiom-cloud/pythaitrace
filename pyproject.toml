@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pythaitrace"
-version = "2.0.0"
+version = "2.0.1"
 description = "Zero-crash bilingual developer diagnostic CLI tool with responsive Rich terminal output and humanized Thai mental models"
 readme = { text = "PyThaiTrace v2.0 - Zero-crash bilingual Python developer diagnostic runner.", content-type = "text/markdown" }
 requires-python = ">=3.8"
