@@ -255,7 +255,7 @@ class MatcherEngine:
         # ------------------------------------------------------------------
         class_candidates = self._rules_by_class.get(exc_type, [])
         for rule, pattern_re in class_candidates:
-            if pattern_re is not None:
+            if pattern_re is not None and rule.error_id != "syntax_error_invalid_syntax":
                 m = pattern_re.search(msg)
                 if m:
                     extracted = {k: v for k, v in m.groupdict().items() if v is not None}
@@ -328,6 +328,118 @@ class MatcherEngine:
                 if r.error_id == error_id:
                     return r
             return None
+
+        if exc_type == "SyntaxError":
+            code_line = ""
+            if norm_tb.primary_frame and norm_tb.primary_frame.code_line:
+                code_line = norm_tb.primary_frame.code_line.strip()
+            if not code_line:
+                for line in norm_tb.raw_lines:
+                    if line.strip().startswith(">"):
+                        code_line = line.split("|", 1)[-1].strip()
+                        break
+
+            # 1. 'for in' missing variable (e.g. 'for in range(9):')
+            if re.search(r"\bfor\s+in\b", code_line):
+                rule = KnowledgeRule(
+                    error_id="syntax_for_missing_variable",
+                    exception_class="SyntaxError",
+                    pattern=None,
+                    summary_th="ขาดชื่อตัวแปรหลังคำสั่ง for (พบคำสั่ง 'for in' ติดกัน)",
+                    mental_model_th=(
+                        "คำสั่ง for ต้องมีตัวแปรมารับค่าในแต่ละรอบ เช่น 'for i in range(9):' "
+                        "แต่ในโค้ดเขียน 'for in' ติดกันโดยไม่มีชื่อตัวแปรคั่นกลาง Python จึงไม่รู้ว่าจะเก็บค่าข้อมูลไว้ที่ตัวแปรใด"
+                    ),
+                    fix_suggestions_th=[
+                        "เติมชื่อตัวแปรคั่นระหว่าง for และ in เช่น 'for i in range(9):' หรือ 'for x in ...'",
+                        "หากไม่ได้นำค่าตัวแปรไปใช้ สามารถใช้เครื่องหมายขีดล่าง _ แทนได้ เช่น 'for _ in range(9):'",
+                    ],
+                    search_keywords="python SyntaxError for in range",
+                )
+                return MatchResult(rule=rule, tier=2, extracted_entities={})
+
+            # 2. 'for' without 'in'
+            if re.search(r"\bfor\s+\w+\s*\(", code_line) or (re.search(r"\bfor\s+\w+", code_line) and " in " not in code_line and ":" in code_line):
+                rule = KnowledgeRule(
+                    error_id="syntax_for_missing_in",
+                    exception_class="SyntaxError",
+                    pattern=None,
+                    summary_th="ขาดคำว่า 'in' ในคำสั่งลูป for",
+                    mental_model_th=(
+                        "โครงสร้างลูป for ของ Python ต้องเขียนในรูปแบบ 'for ตัวแปร in ข้อมูล:' เพื่อระบุว่าจะนำข้อมูลมาจากลำดับใด"
+                    ),
+                    fix_suggestions_th=[
+                        "เติมคำว่า in หลังชื่อตัวแปร เช่น 'for i in range(9):'",
+                    ],
+                    search_keywords="python SyntaxError for loop in",
+                )
+                return MatchResult(rule=rule, tier=2, extracted_entities={})
+
+            # 3. 'def' missing function name
+            if re.search(r"\bdef\s*[\(:]", code_line):
+                rule = KnowledgeRule(
+                    error_id="syntax_def_missing_name",
+                    exception_class="SyntaxError",
+                    pattern=None,
+                    summary_th="ขาดชื่อฟังก์ชันหลังคำสั่ง def",
+                    mental_model_th=(
+                        "การสร้างฟังก์ชันด้วย def ต้องระบุชื่อฟังก์ชันเสมอ เช่น 'def my_func():' เพื่อให้สามารถเรียกใช้งานได้"
+                    ),
+                    fix_suggestions_th=[
+                        "เติมชื่อฟังก์ชันหลังคำสั่ง def เช่น 'def calculate():' หรือ 'def run():'",
+                    ],
+                    search_keywords="python SyntaxError def missing name",
+                )
+                return MatchResult(rule=rule, tier=2, extracted_entities={})
+
+            # 4. 'class' missing class name
+            if re.search(r"\bclass\s*[\(:]", code_line):
+                rule = KnowledgeRule(
+                    error_id="syntax_class_missing_name",
+                    exception_class="SyntaxError",
+                    pattern=None,
+                    summary_th="ขาดชื่อคลาสหลังคำสั่ง class",
+                    mental_model_th="การสร้างคลาสด้วย class ต้องระบุชื่อคลาสเสมอ เช่น 'class MyClass:'",
+                    fix_suggestions_th=[
+                        "เติมชื่อคลาสหลังคำสั่ง class เช่น 'class User:'",
+                    ],
+                    search_keywords="python SyntaxError class missing name",
+                )
+                return MatchResult(rule=rule, tier=2, extracted_entities={})
+
+            # 5. Missing colon at end of block statements
+            if re.search(r"\b(if|elif|else|while|for|def|class|try|except|finally|with)\b", code_line) and not code_line.endswith(":"):
+                rule = KnowledgeRule(
+                    error_id="syntax_missing_colon",
+                    exception_class="SyntaxError",
+                    pattern=None,
+                    summary_th="ขาดเครื่องหมายโคลอน (:) ท้ายบรรทัดคำสั่ง",
+                    mental_model_th=(
+                        "คำสั่งเปิดบล็อกโค้ดใน Python (เช่น if, for, while, def, class) ต้องลงท้ายด้วยเครื่องหมายโคลอน ':' เสมอ"
+                    ),
+                    fix_suggestions_th=[
+                        "เติมเครื่องหมาย : ที่ท้ายบรรทัด เช่น 'if x > 0:' หรือ 'for i in range(9):'",
+                    ],
+                    search_keywords="python SyntaxError expected colon",
+                )
+                return MatchResult(rule=rule, tier=2, extracted_entities={})
+
+            # 6. Single '=' in if/elif/while condition
+            if re.search(r"\b(if|elif|while)\b.*[^\w=!<>](=)[^\w=]", code_line):
+                rule = KnowledgeRule(
+                    error_id="syntax_assignment_in_condition",
+                    exception_class="SyntaxError",
+                    pattern=None,
+                    summary_th="ใช้เครื่องหมายเท่ากับตัวเดียว (=) ในเงื่อนไขเปรียบเทียบ",
+                    mental_model_th=(
+                        "เครื่องหมาย '=' ตัวเดียวเป็นการกำหนดค่าตัวแปร แต่การเปรียบเทียบเงื่อนไขต้องใช้ '==' สองตัว"
+                    ),
+                    fix_suggestions_th=[
+                        "เปลี่ยนเครื่องหมาย '=' ให้เป็น '==' เช่น 'if x == 10:'",
+                    ],
+                    search_keywords="python SyntaxError assignment in condition",
+                )
+                return MatchResult(rule=rule, tier=2, extracted_entities={})
 
         if exc_type == "NameError":
             if "defined" in msg_lower or quoted:

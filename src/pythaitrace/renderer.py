@@ -22,6 +22,15 @@ from rich.text import Text
 from pythaitrace.models import ExplanationCard
 
 
+def _is_termux() -> bool:
+    """Detects whether running in Android Termux environment."""
+    return bool(
+        os.environ.get("TERMUX_VERSION")
+        or "/com.termux/" in os.environ.get("PREFIX", "")
+        or os.environ.get("ANDROID_ROOT")
+    )
+
+
 class ResponsiveRenderer:
     """
     Responsive terminal diagnostic card renderer for PyThaiTrace.
@@ -36,9 +45,10 @@ class ResponsiveRenderer:
         Determines the effective terminal column width using hierarchical resolution:
         1. Explicit parameter 'width'
         2. Environment variable 'COLUMNS'
-        3. Console width property
-        4. shutil.get_terminal_size()
-        5. Default fallback: 80
+        3. Termux check: Default to 60 in Termux unless terminal is confirmed wide
+        4. Console width property
+        5. shutil.get_terminal_size()
+        6. Default fallback: 80
         """
         if width is not None and width > 0:
             return width
@@ -46,6 +56,24 @@ class ResponsiveRenderer:
         env_cols = os.environ.get("COLUMNS")
         if env_cols and env_cols.strip().isdigit() and int(env_cols.strip()) > 0:
             return int(env_cols.strip())
+
+        # If running on Android / Termux, prioritize mobile-friendly width
+        if _is_termux():
+            try:
+                import fcntl, termios, struct
+                with open("/dev/tty", "r") as tty:
+                    cr = struct.unpack("hh", fcntl.ioctl(tty.fileno(), termios.TIOCGWINSZ, "1234"))
+                    if cr[1] > 0:
+                        return cr[1]
+            except Exception:
+                pass
+            try:
+                cols = shutil.get_terminal_size().columns
+                if 0 < cols < 80:
+                    return cols
+            except Exception:
+                pass
+            return 60
 
         if self.console and getattr(self.console, "width", None) and self.console.width > 0:
             return self.console.width
@@ -120,7 +148,7 @@ class ResponsiveRenderer:
         grid = Table.grid(padding=(0, 1))
         grid.add_column(overflow="fold")
 
-        header_title = f"❌ {card.exception_class}: {card.title_th}"
+        header_title = f"[ข้อผิดพลาด] {card.exception_class}: {card.title_th}"
 
         # 1. Summary
         if card.summary_th:
@@ -129,13 +157,13 @@ class ResponsiveRenderer:
 
         # 2. Mental Model (โมเดลความคิด)
         if card.mental_model_th:
-            grid.add_row(Text("💡 โมเดลความคิด:", style="bold yellow"))
+            grid.add_row(Text("[โมเดลความคิด]:", style="bold yellow"))
             grid.add_row(Text(f"   {card.mental_model_th}", style="white"))
             grid.add_row(Text(""))
 
         # 3. Actionable Fix Suggestions (แนวทางแก้ไข)
         if card.fix_suggestions_th:
-            grid.add_row(Text("🛠️ แนวทางแก้ไข:", style="bold green"))
+            grid.add_row(Text("[แนวทางแก้ไข]:", style="bold green"))
             for idx, step in enumerate(card.fix_suggestions_th, 1):
                 grid.add_row(Text(f"   {idx}. {step}", style="white"))
             grid.add_row(Text(""))
@@ -143,12 +171,11 @@ class ResponsiveRenderer:
         # 4. Code Context Snippet (if primary_frame exists)
         if card.primary_frame and card.primary_frame.code_line:
             frame = card.primary_frame
-            grid.add_row(Text("💻 โค้ดที่เกิดปัญหา:", style="bold magenta"))
+            grid.add_row(Text("[โค้ดที่เกิดปัญหา]:", style="bold magenta"))
             if frame.filename:
                 file_info = f"   File \"{frame.filename}\", line {frame.lineno}, in {frame.funcname}"
                 grid.add_row(Text(file_info, style="dim"))
 
-            # Render code line as contiguous run to avoid Pygments ANSI splitting
             line_text = Text(f"   > {frame.lineno} | ", style="bold cyan") + Text(
                 frame.code_line, style="bold white"
             )
@@ -161,13 +188,13 @@ class ResponsiveRenderer:
 
         # 5. Docstring (for fallback cards)
         if card.docstring:
-            grid.add_row(Text("📖 คำอธิบาย (Docstring):", style="bold cyan"))
+            grid.add_row(Text("[คำอธิบายเพิ่มเติม]:", style="bold cyan"))
             grid.add_row(Text(f"   {card.docstring}", style="white"))
             grid.add_row(Text(""))
 
         # 6. Search Queries & URLs
         if card.google_search_url or card.stackoverflow_search_url:
-            grid.add_row(Text("🌐 ค้นหาเพิ่มเติม:", style="bold blue"))
+            grid.add_row(Text("[ค้นหาเพิ่มเติม]:", style="bold blue"))
             if card.google_search_url:
                 grid.add_row(Text(f"   • Google: {card.google_search_url}", style="dim underline"))
             if card.stackoverflow_search_url:
@@ -178,7 +205,7 @@ class ResponsiveRenderer:
         panel = Panel(
             grid,
             title=Text(header_title, style="bold red"),
-            subtitle=Text("PyThaiTrace v2.0 • Zero-Crash Bilingual Diagnostics", style="dim"),
+            subtitle=Text("PyThaiTrace v2.0 • Bilingual Developer Diagnostics", style="dim"),
             border_style="red",
             box=box.DOUBLE,
             expand=True,
@@ -202,13 +229,14 @@ class ResponsiveRenderer:
         """
         Renders flat layout with left-accent bar '▌' for viewports < 80 columns.
         Enforces cell_len(line) <= width across all rendered output.
+        Clean, readable, zero emoji, zero broken box wrapping.
         """
         sep_width = max(width - 1, 10)
 
         # 1. Top separator rule & Header
         console.print(Text("━" * sep_width, style="bold red"))
         header_text = Text("▌ ", style="bold red") + Text(
-            f"❌ {card.exception_class}: {card.title_th}", style="bold red"
+            f"[ข้อผิดพลาด] {card.exception_class}: {card.title_th}", style="bold red"
         )
         header_text.overflow = "fold"
         console.print(header_text)
@@ -222,14 +250,14 @@ class ResponsiveRenderer:
 
         # 2. Mental Model (โมเดลความคิด)
         if card.mental_model_th:
-            console.print(Text("▌ ", style="bold yellow") + Text("💡 โมเดลความคิด:", style="bold yellow"))
+            console.print(Text("▌ ", style="bold yellow") + Text("[โมเดลความคิด]:", style="bold yellow"))
             mm_text = Text(f"  {card.mental_model_th}", style="white")
             mm_text.overflow = "fold"
             console.print(mm_text)
 
         # 3. Actionable Fix Suggestions (แนวทางแก้ไข)
         if card.fix_suggestions_th:
-            console.print(Text("▌ ", style="bold green") + Text("🛠️ แนวทางแก้ไข:", style="bold green"))
+            console.print(Text("▌ ", style="bold green") + Text("[แนวทางแก้ไข]:", style="bold green"))
             for idx, step in enumerate(card.fix_suggestions_th, 1):
                 step_text = Text(f"  {idx}. {step}", style="white")
                 step_text.overflow = "fold"
@@ -238,7 +266,7 @@ class ResponsiveRenderer:
         # 4. Code Context Snippet (if primary_frame exists)
         if card.primary_frame and card.primary_frame.code_line:
             frame = card.primary_frame
-            console.print(Text("▌ ", style="bold magenta") + Text("💻 โค้ดที่เกิดปัญหา:", style="bold magenta"))
+            console.print(Text("▌ ", style="bold magenta") + Text("[โค้ดที่เกิดปัญหา]:", style="bold magenta"))
             if frame.filename:
                 file_info = f"  File \"{frame.filename}\", line {frame.lineno}, in {frame.funcname}"
                 file_text = Text(file_info, style="dim")
@@ -259,14 +287,14 @@ class ResponsiveRenderer:
 
         # 5. Docstring (for fallback cards)
         if card.docstring:
-            console.print(Text("▌ ", style="bold cyan") + Text("📖 คำอธิบาย (Docstring):", style="bold cyan"))
+            console.print(Text("▌ ", style="bold cyan") + Text("[คำอธิบายเพิ่มเติม]:", style="bold cyan"))
             doc_text = Text(f"  {card.docstring}", style="white")
             doc_text.overflow = "fold"
             console.print(doc_text)
 
         # 6. Search Queries & URLs
         if card.google_search_url or card.stackoverflow_search_url:
-            console.print(Text("▌ ", style="bold blue") + Text("🌐 ค้นหาเพิ่มเติม:", style="bold blue"))
+            console.print(Text("▌ ", style="bold blue") + Text("[ค้นหาเพิ่มเติม]:", style="bold blue"))
             if card.google_search_url:
                 g_text = Text(f"  • Google: {card.google_search_url}", style="dim underline")
                 g_text.overflow = "fold"
@@ -348,7 +376,12 @@ class ResponsiveRenderer:
         except BaseException:
             try:
                 safe_text = text.encode("ascii", errors="replace").decode("ascii")
-                sys.stderr.write(safe_text)
-                sys.stderr.flush()
+                if hasattr(stream_or_console, "write"):
+                    stream_or_console.write(safe_text)
+                    if hasattr(stream_or_console, "flush"):
+                        stream_or_console.flush()
+                else:
+                    sys.stderr.write(safe_text)
+                    sys.stderr.flush()
             except BaseException:
                 pass
