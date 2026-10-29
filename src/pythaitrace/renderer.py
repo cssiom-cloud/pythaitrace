@@ -95,7 +95,7 @@ class ResponsiveRenderer:
             if orig_width is not None and orig_width != eff_width:
                 self.console.width = eff_width
 
-            if eff_width >= 80:
+            if eff_width >= 80 and not _is_termux():
                 self._render_wide(card, self.console, eff_width)
             else:
                 self._render_narrow(card, self.console, eff_width)
@@ -129,7 +129,7 @@ class ResponsiveRenderer:
         )
 
         try:
-            if eff_width >= 80:
+            if eff_width >= 80 and not _is_termux():
                 self._render_wide(card, str_console, eff_width)
             else:
                 self._render_narrow(card, str_console, eff_width)
